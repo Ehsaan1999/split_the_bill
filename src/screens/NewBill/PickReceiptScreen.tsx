@@ -112,13 +112,16 @@ export default function PickReceiptScreen({ navigation }: Props) {
       setParticipantIds(selected);
       setMerchant(parsed.merchant);
       setItems(
-        parsed.items.map((item) => ({
-          id: generateId(),
-          name: item.name,
-          qty: item.qty,
-          unitPrice: item.unitPrice,
-          assignedFriendIds: [],
-        }))
+        parsed.items.map((item) => {
+          const qty = Number.isFinite(item.qty) && item.qty > 0 ? Math.floor(item.qty) : 1;
+          return {
+            id: generateId(),
+            name: item.name,
+            qty,
+            unitPrice: item.unitPrice,
+            unitAssignments: Array.from({ length: qty }, () => []),
+          };
+        })
       );
       setBillTotals({
         subtotal: getEffectiveSubtotal(parsed),

@@ -14,7 +14,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'AssignFriends'>;
 export default function AssignFriendsScreen({ navigation }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const { items, updateItem, participantIds } = useNewBill();
+  const { items, setUnitAssignment, participantIds } = useNewBill();
   const [friends, setFriends] = useState<Friend[]>([]);
 
   useEffect(() => {
@@ -23,23 +23,28 @@ export default function AssignFriendsScreen({ navigation }: Props) {
 
   const participants = friends.filter((f) => participantIds.includes(f.id));
 
-  const toggleAssignee = (itemId: string, friendId: string) => {
-    const item = items.find((i) => i.id === itemId);
-    if (!item) return;
-    const already = item.assignedFriendIds.includes(friendId);
-    updateItem(itemId, {
-      assignedFriendIds: already
-        ? item.assignedFriendIds.filter((id) => id !== friendId)
-        : [...item.assignedFriendIds, friendId],
-    });
+  const toggleUnitAssignee = (itemId: string, unitIndex: number, currentAssignees: string[], friendId: string) => {
+    const already = currentAssignees.includes(friendId);
+    setUnitAssignment(
+      itemId,
+      unitIndex,
+      already ? currentAssignees.filter((id) => id !== friendId) : [...currentAssignees, friendId]
+    );
   };
 
   const onContinue = () => {
-    const unassigned = items.filter((item) => item.assignedFriendIds.length === 0);
-    if (unassigned.length > 0) {
+    const unassignedUnits = items.flatMap((item) =>
+      item.unitAssignments
+        .map((assignees, unitIndex) => ({ item, unitIndex, assignees }))
+        .filter((u) => u.assignees.length === 0)
+    );
+    if (unassignedUnits.length > 0) {
+      const labels = unassignedUnits.map(
+        ({ item, unitIndex }) => `${item.name || 'Unnamed item'}${item.qty > 1 ? ` (${unitIndex + 1}/${item.qty})` : ''}`
+      );
       Alert.alert(
         'Some items unassigned',
-        `${unassigned.map((i) => i.name || 'Unnamed item').join(', ')} ${unassigned.length > 1 ? "aren't" : "isn't"} assigned to anyone and won't be split. Continue anyway?`,
+        `${labels.join(', ')} ${labels.length > 1 ? "aren't" : "isn't"} assigned to anyone and won't be split. Continue anyway?`,
         [
           { text: 'Go back', style: 'cancel' },
           { text: 'Continue anyway', onPress: () => navigation.navigate('Summary') },
@@ -52,27 +57,35 @@ export default function AssignFriendsScreen({ navigation }: Props) {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
-      <Text style={styles.hint}>Tap who had each item. Shared items split evenly among everyone tapped.</Text>
+      <Text style={styles.hint}>
+        Tap who had each item. Ordered more than one? Each one is assigned separately — split a
+        single one among a group by tapping more than one person for it.
+      </Text>
       {items.map((item) => (
-        <View key={item.id} style={styles.itemBlock}>
-          <View style={styles.itemHeader}>
-            <Text style={styles.itemName}>{item.name || 'Unnamed item'}</Text>
-            <Text style={styles.itemPrice}>{formatCurrency(item.qty * item.unitPrice)}</Text>
-          </View>
-          <View style={styles.chipRow}>
-            {participants.map((friend) => {
-              const isSelected = item.assignedFriendIds.includes(friend.id);
-              return (
-                <Pressable
-                  key={friend.id}
-                  style={[styles.chip, isSelected && styles.chipSelected]}
-                  onPress={() => toggleAssignee(item.id, friend.id)}
-                >
-                  <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>{friend.name}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
+        <View key={item.id} style={styles.itemGroup}>
+          <Text style={styles.itemName}>{item.name || 'Unnamed item'}</Text>
+          {item.unitAssignments.map((assignees, unitIndex) => (
+            <View key={unitIndex} style={styles.unitBlock}>
+              <View style={styles.itemHeader}>
+                <Text style={styles.unitLabel}>{item.qty > 1 ? `Unit ${unitIndex + 1} of ${item.qty}` : 'Price'}</Text>
+                <Text style={styles.itemPrice}>{formatCurrency(item.unitPrice)}</Text>
+              </View>
+              <View style={styles.chipRow}>
+                {participants.map((friend) => {
+                  const isSelected = assignees.includes(friend.id);
+                  return (
+                    <Pressable
+                      key={friend.id}
+                      style={[styles.chip, isSelected && styles.chipSelected]}
+                      onPress={() => toggleUnitAssignee(item.id, unitIndex, assignees, friend.id)}
+                    >
+                      <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>{friend.name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ))}
         </View>
       ))}
 
@@ -87,9 +100,11 @@ const createStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     hint: { color: colors.textMuted, marginBottom: 16 },
-    itemBlock: { marginBottom: 20 },
-    itemHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-    itemName: { fontSize: 15, fontWeight: '600', color: colors.text },
+    itemGroup: { marginBottom: 20 },
+    itemName: { fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 8 },
+    unitBlock: { marginBottom: 12, paddingLeft: 4 },
+    itemHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+    unitLabel: { fontSize: 13, color: colors.textMuted },
     itemPrice: { color: colors.textMuted },
     chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     chip: {

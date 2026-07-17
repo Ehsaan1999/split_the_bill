@@ -1,4 +1,28 @@
-import { computeBillSplit, computeItemFinalPrice, splitTip } from '../src/lib/calc';
+import { computeBillSplit, computeItemFinalPrice, expandItemsToUnits, splitTip } from '../src/lib/calc';
+
+describe('expandItemsToUnits', () => {
+  it('splits a multi-quantity item into one unit per item ordered, each with its own assignment', () => {
+    const units = expandItemsToUnits([
+      { id: 'item-1', name: 'Bottle of Water', unitPrice: 100, qty: 3, unitAssignments: [['alice'], ['bob'], ['alice', 'bob']] },
+    ]);
+    expect(units).toHaveLength(3);
+    expect(units[0]).toMatchObject({ id: 'item-1:0', sourceId: 'item-1', unitIndex: 0, totalUnits: 3, assignedFriendIds: ['alice'] });
+    expect(units[1]).toMatchObject({ id: 'item-1:1', unitIndex: 1, assignedFriendIds: ['bob'] });
+    expect(units[2]).toMatchObject({ id: 'item-1:2', unitIndex: 2, assignedFriendIds: ['alice', 'bob'] });
+  });
+
+  it('defaults a missing unit assignment to unassigned rather than throwing', () => {
+    const units = expandItemsToUnits([{ id: 'item-1', name: 'Fries', unitPrice: 50, qty: 2, unitAssignments: [['alice']] }]);
+    expect(units[1].assignedFriendIds).toEqual([]);
+  });
+
+  it('produces one unit for a qty-1 item, matching pre-existing single-item behavior', () => {
+    const units = expandItemsToUnits([{ id: 'item-1', name: 'Karahi', unitPrice: 400, qty: 1, unitAssignments: [['alice']] }]);
+    expect(units).toEqual([
+      { id: 'item-1:0', sourceId: 'item-1', name: 'Karahi', unitPrice: 400, unitIndex: 0, totalUnits: 1, assignedFriendIds: ['alice'] },
+    ]);
+  });
+});
 
 describe('computeItemFinalPrice', () => {
   it('matches the worked example: 100 rupee item, 10% discount, 8% tax -> 98', () => {

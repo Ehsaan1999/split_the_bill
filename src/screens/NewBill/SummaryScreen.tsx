@@ -3,7 +3,7 @@ import * as Clipboard from 'expo-clipboard';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useNewBill } from '../../context/NewBillContext';
-import { computeBillSplit } from '../../lib/calc';
+import { computeBillSplit, expandItemsToUnits } from '../../lib/calc';
 import { formatCurrency } from '../../lib/currency';
 import { listFriends, saveBill } from '../../lib/db';
 import { useTheme } from '../../theme/ThemeContext';
@@ -47,14 +47,17 @@ export default function SummaryScreen({ navigation }: Props) {
 
   const friendNameById = useMemo(() => Object.fromEntries(friends.map((f) => [f.id, f.name])), [friends]);
 
+  const units = useMemo(() => expandItemsToUnits(items), [items]);
+  const unitById = useMemo(() => Object.fromEntries(units.map((u) => [u.id, u])), [units]);
+
   const split = useMemo(
     () =>
       computeBillSplit({
-        items: items.map((item) => ({
-          id: item.id,
-          unitPrice: item.unitPrice,
-          qty: item.qty,
-          assignedFriendIds: item.assignedFriendIds,
+        items: units.map((unit) => ({
+          id: unit.id,
+          unitPrice: unit.unitPrice,
+          qty: 1,
+          assignedFriendIds: unit.assignedFriendIds,
         })),
         subtotal,
         discountPercent,
@@ -65,7 +68,7 @@ export default function SummaryScreen({ navigation }: Props) {
         tipSplitMode: mode,
         friendIds: participantIds,
       }),
-    [items, subtotal, discountPercent, discountAmount, taxPercent, taxAmount, tipText, mode, participantIds]
+    [units, subtotal, discountPercent, discountAmount, taxPercent, taxAmount, tipText, mode, participantIds]
   );
 
   const buildShareText = () => {
@@ -110,7 +113,7 @@ export default function SummaryScreen({ navigation }: Props) {
           name: item.name || 'Unnamed item',
           qty: item.qty,
           unitPrice: item.unitPrice,
-          assignedFriendIds: item.assignedFriendIds,
+          unitAssignments: item.unitAssignments,
         })),
       });
       reset();
@@ -157,10 +160,13 @@ export default function SummaryScreen({ navigation }: Props) {
           {split.items
             .filter((item) => item.perFriendShare[friendId] != null)
             .map((item) => {
-              const source = items.find((i) => i.id === item.id);
+              const unit = unitById[item.id];
+              const label = unit
+                ? `${unit.name || 'Item'}${unit.totalUnits > 1 ? ` (${unit.unitIndex + 1}/${unit.totalUnits})` : ''}`
+                : 'Item';
               return (
                 <View key={item.id} style={styles.itemLine}>
-                  <Text style={styles.itemLineName}>{source?.name || 'Item'}</Text>
+                  <Text style={styles.itemLineName}>{label}</Text>
                   <Text style={styles.itemLineAmount}>{formatCurrency(item.perFriendShare[friendId])}</Text>
                 </View>
               );

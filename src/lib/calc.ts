@@ -74,6 +74,49 @@ export interface BillItemInput {
   assignedFriendIds: string[];
 }
 
+export interface LineItemWithUnitAssignments {
+  id: string;
+  name: string;
+  unitPrice: number;
+  qty: number;
+  /** One entry per unit (length === qty) — who's sharing that specific unit. */
+  unitAssignments: string[][];
+}
+
+export interface ExpandedUnit {
+  id: string;
+  sourceId: string;
+  name: string;
+  unitPrice: number;
+  unitIndex: number;
+  totalUnits: number;
+  assignedFriendIds: string[];
+}
+
+/**
+ * Splits each multi-quantity line into one qty-1 "unit" per item ordered, each carrying its
+ * own assignment — so 3 bottles of water can go to 3 different people instead of the whole
+ * line being forced to split evenly across whoever's tapped. Used identically before both
+ * computing the on-screen split and persisting a saved bill, so the two never drift apart.
+ */
+export function expandItemsToUnits(items: LineItemWithUnitAssignments[]): ExpandedUnit[] {
+  const units: ExpandedUnit[] = [];
+  for (const item of items) {
+    for (let unitIndex = 0; unitIndex < item.qty; unitIndex++) {
+      units.push({
+        id: `${item.id}:${unitIndex}`,
+        sourceId: item.id,
+        name: item.name,
+        unitPrice: item.unitPrice,
+        unitIndex,
+        totalUnits: item.qty,
+        assignedFriendIds: item.unitAssignments[unitIndex] ?? [],
+      });
+    }
+  }
+  return units;
+}
+
 export interface ComputeBillSplitInput {
   items: BillItemInput[];
   subtotal: number;

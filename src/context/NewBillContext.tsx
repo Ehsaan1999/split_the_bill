@@ -7,7 +7,16 @@ export interface DraftItem {
   name: string;
   qty: number;
   unitPrice: number;
-  assignedFriendIds: string[];
+  /** One entry per unit (length always === qty) — who's sharing that specific unit. */
+  unitAssignments: string[][];
+}
+
+/** Resizes a unit-assignment list to a new qty, preserving existing units and padding new ones empty. */
+function resizeUnitAssignments(unitAssignments: string[][], newQty: number): string[][] {
+  const safeQty = Number.isFinite(newQty) && newQty > 0 ? Math.floor(newQty) : 0;
+  const next = unitAssignments.slice(0, safeQty);
+  while (next.length < safeQty) next.push([]);
+  return next;
 }
 
 interface NewBillState {
@@ -38,6 +47,7 @@ interface NewBillContextValue extends NewBillState {
   addItem: () => void;
   updateItem: (id: string, patch: Partial<DraftItem>) => void;
   removeItem: (id: string) => void;
+  setUnitAssignment: (itemId: string, unitIndex: number, friendIds: string[]) => void;
   setBillTotals: (totals: BillTotalsPatch) => void;
   setTip: (amount: number, mode: TipSplitMode) => void;
   reset: () => void;
@@ -73,7 +83,7 @@ export function NewBillProvider({ children }: { children: React.ReactNode }) {
     () =>
       setState((s) => ({
         ...s,
-        items: [...s.items, { id: generateId(), name: '', qty: 1, unitPrice: 0, assignedFriendIds: [] }],
+        items: [...s.items, { id: generateId(), name: '', qty: 1, unitPrice: 0, unitAssignments: [[]] }],
       })),
     []
   );
@@ -81,12 +91,34 @@ export function NewBillProvider({ children }: { children: React.ReactNode }) {
     (id: string, patch: Partial<DraftItem>) =>
       setState((s) => ({
         ...s,
-        items: s.items.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+        items: s.items.map((item) => {
+          if (item.id !== id) return item;
+          const next = { ...item, ...patch };
+          // A qty change must keep unitAssignments in lockstep (one entry per unit) —
+          // otherwise per-unit assignment in AssignFriendsScreen would read stale/missing slots.
+          if (patch.qty != null && patch.qty !== item.qty) {
+            next.unitAssignments = resizeUnitAssignments(item.unitAssignments, patch.qty);
+          }
+          return next;
+        }),
       })),
     []
   );
   const removeItem = useCallback(
     (id: string) => setState((s) => ({ ...s, items: s.items.filter((item) => item.id !== id) })),
+    []
+  );
+  const setUnitAssignment = useCallback(
+    (itemId: string, unitIndex: number, friendIds: string[]) =>
+      setState((s) => ({
+        ...s,
+        items: s.items.map((item) => {
+          if (item.id !== itemId) return item;
+          const unitAssignments = item.unitAssignments.slice();
+          unitAssignments[unitIndex] = friendIds;
+          return { ...item, unitAssignments };
+        }),
+      })),
     []
   );
   const setBillTotals = useCallback((totals: BillTotalsPatch) => setState((s) => ({ ...s, ...totals })), []);
@@ -105,11 +137,24 @@ export function NewBillProvider({ children }: { children: React.ReactNode }) {
       addItem,
       updateItem,
       removeItem,
+      setUnitAssignment,
       setBillTotals,
       setTip,
       reset,
     }),
-    [state, setMerchant, setParticipantIds, setItems, addItem, updateItem, removeItem, setBillTotals, setTip, reset]
+    [
+      state,
+      setMerchant,
+      setParticipantIds,
+      setItems,
+      addItem,
+      updateItem,
+      removeItem,
+      setUnitAssignment,
+      setBillTotals,
+      setTip,
+      reset,
+    ]
   );
 
   return <NewBillContext.Provider value={value}>{children}</NewBillContext.Provider>;

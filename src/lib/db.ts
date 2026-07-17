@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import type { Friend, TipSplitMode } from '../types/bill';
-import { computeBillSplit, type BillItemInput } from './calc';
+import { computeBillSplit, expandItemsToUnits } from './calc';
 import { generateId } from './id';
 
 const DB_NAME = 'split_the_bill.db';
@@ -151,7 +151,8 @@ export interface SaveBillItemInput {
   name: string;
   qty: number;
   unitPrice: number;
-  assignedFriendIds: string[];
+  /** One entry per unit (length === qty) — who's sharing that specific unit. */
+  unitAssignments: string[][];
 }
 
 export interface SaveBillInput {
@@ -172,16 +173,15 @@ export async function saveBill(input: SaveBillInput): Promise<string> {
   const db = await getDb();
   const billId = generateId();
 
-  const itemsWithIds = input.items.map((item) => ({ ...item, id: generateId() }));
-  const calcItems: BillItemInput[] = itemsWithIds.map((item) => ({
-    id: item.id,
-    unitPrice: item.unitPrice,
-    qty: item.qty,
-    assignedFriendIds: item.assignedFriendIds,
-  }));
+  // Each unit of a multi-quantity item (e.g. 3 bottles of water) is persisted as its own
+  // bill_items row with its own assignments, since units can go to different people — see
+  // expandItemsToUnits for why this must stay identical to the split shown on-screen.
+  const units = expandItemsToUnits(
+    input.items.map((item, index) => ({ id: String(index), name: item.name, unitPrice: item.unitPrice, qty: item.qty, unitAssignments: item.unitAssignments }))
+  ).map((unit) => ({ ...unit, id: generateId() }));
 
   const split = computeBillSplit({
-    items: calcItems,
+    items: units.map((unit) => ({ id: unit.id, unitPrice: unit.unitPrice, qty: 1, assignedFriendIds: unit.assignedFriendIds })),
     subtotal: input.subtotal,
     discountPercent: input.discountPercent,
     discountAmount: input.discountAmount,
@@ -209,19 +209,19 @@ export async function saveBill(input: SaveBillInput): Promise<string> {
       split.grandTotal
     );
 
-    for (const item of itemsWithIds) {
-      const result = split.items.find((i) => i.id === item.id)!;
+    for (const unit of units) {
+      const result = split.items.find((i) => i.id === unit.id)!;
       await db.runAsync(
         'INSERT INTO bill_items (id, bill_id, name, qty, unit_price, final_price) VALUES (?, ?, ?, ?, ?, ?)',
-        item.id,
+        unit.id,
         billId,
-        item.name,
-        item.qty,
-        item.unitPrice,
+        unit.name,
+        1,
+        unit.unitPrice,
         result.finalPrice
       );
-      for (const friendId of item.assignedFriendIds) {
-        await db.runAsync('INSERT INTO item_assignments (item_id, friend_id) VALUES (?, ?)', item.id, friendId);
+      for (const friendId of unit.assignedFriendIds) {
+        await db.runAsync('INSERT INTO item_assignments (item_id, friend_id) VALUES (?, ?)', unit.id, friendId);
       }
     }
 
