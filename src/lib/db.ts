@@ -1,6 +1,5 @@
 import * as SQLite from 'expo-sqlite';
 import type { Friend, TipSplitMode } from '../types/bill';
-import { computeBillSplit, expandItemsToUnits } from './calc';
 import { generateId } from './id';
 
 const DB_NAME = 'split_the_bill.db';
@@ -147,52 +146,38 @@ export async function deleteGroup(id: string): Promise<void> {
 
 // ---- Bills ----
 
-export interface SaveBillItemInput {
+export interface SaveBillUnitInput {
   name: string;
-  qty: number;
   unitPrice: number;
-  /** One entry per unit (length === qty) — who's sharing that specific unit. */
-  unitAssignments: string[][];
+  /** Pre-computed by calc.ts — discount/tax (possibly per-batch) already applied. */
+  finalPrice: number;
+  assignedFriendIds: string[];
 }
 
 export interface SaveBillInput {
   date: string;
   merchant: string | null;
   subtotal: number;
+  /** Informational only — with isolated per-receipt discount/tax there's no single rate to store. */
   discountPercent?: number | null;
   discountAmount?: number | null;
   taxPercent?: number | null;
   taxAmount?: number | null;
   tipAmount?: number;
   tipSplitMode?: TipSplitMode;
-  tipEligibleFriendIds?: string[];
   friendIds: string[];
-  items: SaveBillItemInput[];
+  /** Already-expanded, already-priced units — the same ones shown on the Summary screen. */
+  units: SaveBillUnitInput[];
+  /** The exact split shown on-screen (computeBillSplit's result) — saved as-is, never recomputed. */
+  perFriendItemTotal: Record<string, number>;
+  perFriendTip: Record<string, number>;
+  perFriendTotal: Record<string, number>;
+  grandTotal: number;
 }
 
 export async function saveBill(input: SaveBillInput): Promise<string> {
   const db = await getDb();
   const billId = generateId();
-
-  // Each unit of a multi-quantity item (e.g. 3 bottles of water) is persisted as its own
-  // bill_items row with its own assignments, since units can go to different people — see
-  // expandItemsToUnits for why this must stay identical to the split shown on-screen.
-  const units = expandItemsToUnits(
-    input.items.map((item, index) => ({ id: String(index), name: item.name, unitPrice: item.unitPrice, qty: item.qty, unitAssignments: item.unitAssignments }))
-  ).map((unit) => ({ ...unit, id: generateId() }));
-
-  const split = computeBillSplit({
-    items: units.map((unit) => ({ id: unit.id, unitPrice: unit.unitPrice, qty: 1, assignedFriendIds: unit.assignedFriendIds })),
-    subtotal: input.subtotal,
-    discountPercent: input.discountPercent,
-    discountAmount: input.discountAmount,
-    taxPercent: input.taxPercent,
-    taxAmount: input.taxAmount,
-    tipAmount: input.tipAmount ?? 0,
-    tipSplitMode: input.tipSplitMode ?? 'even',
-    tipEligibleFriendIds: input.tipEligibleFriendIds,
-    friendIds: input.friendIds,
-  });
 
   await db.withTransactionAsync(async () => {
     await db.runAsync(
@@ -208,22 +193,22 @@ export async function saveBill(input: SaveBillInput): Promise<string> {
       input.taxAmount ?? null,
       input.tipAmount ?? 0,
       input.tipSplitMode ?? 'even',
-      split.grandTotal
+      input.grandTotal
     );
 
-    for (const unit of units) {
-      const result = split.items.find((i) => i.id === unit.id)!;
+    for (const unit of input.units) {
+      const unitId = generateId();
       await db.runAsync(
         'INSERT INTO bill_items (id, bill_id, name, qty, unit_price, final_price) VALUES (?, ?, ?, ?, ?, ?)',
-        unit.id,
+        unitId,
         billId,
         unit.name,
         1,
         unit.unitPrice,
-        result.finalPrice
+        unit.finalPrice
       );
       for (const friendId of unit.assignedFriendIds) {
-        await db.runAsync('INSERT INTO item_assignments (item_id, friend_id) VALUES (?, ?)', unit.id, friendId);
+        await db.runAsync('INSERT INTO item_assignments (item_id, friend_id) VALUES (?, ?)', unitId, friendId);
       }
     }
 
@@ -232,9 +217,9 @@ export async function saveBill(input: SaveBillInput): Promise<string> {
         'INSERT INTO bill_friend_totals (bill_id, friend_id, item_total, tip_total, total) VALUES (?, ?, ?, ?, ?)',
         billId,
         friendId,
-        split.perFriendItemTotal[friendId] ?? 0,
-        split.perFriendTip[friendId] ?? 0,
-        split.perFriendTotal[friendId] ?? 0
+        input.perFriendItemTotal[friendId] ?? 0,
+        input.perFriendTip[friendId] ?? 0,
+        input.perFriendTotal[friendId] ?? 0
       );
     }
   });

@@ -3,7 +3,15 @@ import { computeBillSplit, computeItemFinalPrice, expandItemsToUnits, splitTip }
 describe('expandItemsToUnits', () => {
   it('splits a multi-quantity item into one unit per item ordered, each with its own assignment', () => {
     const units = expandItemsToUnits([
-      { id: 'item-1', name: 'Bottle of Water', unitPrice: 100, qty: 3, unitAssignments: [['alice'], ['bob'], ['alice', 'bob']] },
+      {
+        id: 'item-1',
+        name: 'Bottle of Water',
+        unitPrice: 100,
+        qty: 3,
+        batchId: 'scan-1',
+        unitAssignments: [['alice'], ['bob'], ['alice', 'bob']],
+        unitSplitModes: ['even', 'even', 'even'],
+      },
     ]);
     expect(units).toHaveLength(3);
     expect(units[0]).toMatchObject({ id: 'item-1:0', sourceId: 'item-1', unitIndex: 0, totalUnits: 3, assignedFriendIds: ['alice'] });
@@ -12,14 +20,36 @@ describe('expandItemsToUnits', () => {
   });
 
   it('defaults a missing unit assignment to unassigned rather than throwing', () => {
-    const units = expandItemsToUnits([{ id: 'item-1', name: 'Fries', unitPrice: 50, qty: 2, unitAssignments: [['alice']] }]);
+    const units = expandItemsToUnits([
+      { id: 'item-1', name: 'Fries', unitPrice: 50, qty: 2, batchId: 'manual', unitAssignments: [['alice']], unitSplitModes: ['even'] },
+    ]);
     expect(units[1].assignedFriendIds).toEqual([]);
   });
 
+  it('defaults a missing unit split mode to even rather than throwing', () => {
+    const units = expandItemsToUnits([
+      { id: 'item-1', name: 'Fries', unitPrice: 50, qty: 2, batchId: 'manual', unitAssignments: [['alice'], ['bob']], unitSplitModes: ['each'] },
+    ]);
+    expect(units[0].splitMode).toBe('each');
+    expect(units[1].splitMode).toBe('even');
+  });
+
   it('produces one unit for a qty-1 item, matching pre-existing single-item behavior', () => {
-    const units = expandItemsToUnits([{ id: 'item-1', name: 'Karahi', unitPrice: 400, qty: 1, unitAssignments: [['alice']] }]);
+    const units = expandItemsToUnits([
+      { id: 'item-1', name: 'Karahi', unitPrice: 400, qty: 1, batchId: 'scan-1', unitAssignments: [['alice']], unitSplitModes: ['even'] },
+    ]);
     expect(units).toEqual([
-      { id: 'item-1:0', sourceId: 'item-1', name: 'Karahi', unitPrice: 400, unitIndex: 0, totalUnits: 1, assignedFriendIds: ['alice'] },
+      {
+        id: 'item-1:0',
+        sourceId: 'item-1',
+        name: 'Karahi',
+        unitPrice: 400,
+        unitIndex: 0,
+        totalUnits: 1,
+        batchId: 'scan-1',
+        assignedFriendIds: ['alice'],
+        splitMode: 'even',
+      },
     ]);
   });
 });
@@ -163,5 +193,52 @@ describe('computeBillSplit', () => {
     expect(result.items[0].lineTotal).toBe(200);
     expect(result.items[0].finalPrice).toBe(196);
     expect(result.perFriendItemTotal).toEqual({ a: 98, b: 98 });
+  });
+
+  it("charges the full price to each assignee when splitMode is 'each', not divided", () => {
+    // Rs1000 bowling game, each of 3 people played their own — Rs1000 each, not Rs333.33 each
+    const result = computeBillSplit({
+      items: [{ id: 'bowling', unitPrice: 1000, qty: 1, assignedFriendIds: ['a', 'b', 'c'], splitMode: 'each' }],
+      subtotal: 1000,
+      friendIds: ['a', 'b', 'c'],
+    });
+
+    expect(result.perFriendItemTotal).toEqual({ a: 1000, b: 1000, c: 1000 });
+    expect(result.grandTotal).toBe(3000);
+  });
+
+  it("isolated discountTaxMode applies each item's own batch totals instead of the bill-wide ones", () => {
+    // Receipt batch: 25% off. Manual batch: no discount at all (not in batchTotals).
+    const result = computeBillSplit({
+      items: [
+        { id: 'burger', unitPrice: 800, qty: 1, assignedFriendIds: ['a'], batchId: 'scan-1' },
+        { id: 'parking', unitPrice: 100, qty: 1, assignedFriendIds: ['a'], batchId: 'manual' },
+      ],
+      subtotal: 0,
+      // Bill-wide fields deliberately different from the batch's own, to prove isolated mode ignores them.
+      discountPercent: 0.9,
+      discountTaxMode: 'isolated',
+      batchTotals: { 'scan-1': { subtotal: 800, discountPercent: 0.25 } },
+      friendIds: ['a'],
+    });
+
+    expect(result.items.find((i) => i.id === 'burger')?.finalPrice).toBe(600); // 800 * 0.75
+    expect(result.items.find((i) => i.id === 'parking')?.finalPrice).toBe(100); // no discount at all
+    expect(result.perFriendItemTotal.a).toBe(700);
+  });
+
+  it('flat discountTaxMode (the default) applies the bill-wide rate to every item regardless of batch', () => {
+    const result = computeBillSplit({
+      items: [
+        { id: 'burger', unitPrice: 800, qty: 1, assignedFriendIds: ['a'], batchId: 'scan-1' },
+        { id: 'parking', unitPrice: 100, qty: 1, assignedFriendIds: ['a'], batchId: 'manual' },
+      ],
+      subtotal: 900,
+      discountPercent: 0.25,
+      friendIds: ['a'],
+    });
+
+    expect(result.items.find((i) => i.id === 'burger')?.finalPrice).toBe(600);
+    expect(result.items.find((i) => i.id === 'parking')?.finalPrice).toBe(75);
   });
 });

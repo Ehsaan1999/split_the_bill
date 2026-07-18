@@ -3,12 +3,9 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { recognizeReceiptViaCloud } from '../../lib/cloudOcr';
-import { recognizeReceiptViaGemini } from '../../lib/cloudOcrGemini';
 import { type Group, listFriends, listGroups } from '../../lib/db';
-import { generateId } from '../../lib/id';
-import { recognizeReceiptOnDevice } from '../../lib/ocrOnDevice';
 import { getEffectiveSubtotal } from '../../lib/receiptParser';
+import { scanReceiptImage } from '../../lib/scanReceipt';
 import { useNewBill } from '../../context/NewBillContext';
 import { useTheme } from '../../theme/ThemeContext';
 import type { ThemeColors } from '../../theme/colors';
@@ -20,7 +17,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'PickReceipt'>;
 export default function PickReceiptScreen({ navigation }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const { setParticipantIds, setMerchant, setItems, setBillTotals, reset } = useNewBill();
+  const { setParticipantIds, setMerchant, setBillTotals, addBatch, reset } = useNewBill();
   const [friends, setFriends] = useState<Friend[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -71,60 +68,33 @@ export default function PickReceiptScreen({ navigation }: Props) {
     const asset = result.assets[0];
     setBusy(true);
     try {
-      setStatusText('Scanning receipt on-device…');
-      const onDevice = await recognizeReceiptOnDevice(asset.uri);
-      let parsed = onDevice.parsed;
+      const { parsed, cloudErrors, usedOnDeviceFallback } = await scanReceiptImage(asset, setStatusText);
 
-      if (!onDevice.confident) {
-        if (!asset.base64) {
-          Alert.alert(
-            'Cloud scan unavailable',
-            "Image data unavailable for cloud scan.\n\nContinuing with the on-device scan — you can fix anything wrong on the next screen."
-          );
-        } else {
-          const cloudErrors: string[] = [];
-
-          setStatusText('On-device scan was unsure — asking Gemini for a second look…');
-          try {
-            parsed = await recognizeReceiptViaGemini(asset.base64, asset.mimeType ?? 'image/jpeg');
-          } catch (geminiError: any) {
-            console.error('[PickReceipt] Gemini scan failed', geminiError);
-            cloudErrors.push(`Gemini: ${geminiError.message ?? 'unknown error'}`);
-
-            setStatusText('Gemini scan unavailable — trying OpenAI…');
-            try {
-              parsed = await recognizeReceiptViaCloud(asset.base64, asset.mimeType ?? 'image/jpeg');
-            } catch (openAiError: any) {
-              console.error('[PickReceipt] OpenAI scan failed', openAiError);
-              cloudErrors.push(`OpenAI: ${openAiError.message ?? 'unknown error'}`);
-            }
-          }
-
-          if (cloudErrors.length > 0 && parsed === onDevice.parsed) {
-            Alert.alert(
-              'Cloud scan unavailable',
-              `${cloudErrors.join('\n')}\n\nContinuing with the on-device scan — you can fix anything wrong on the next screen.`
-            );
-          }
-        }
+      if (cloudErrors.length > 0 && usedOnDeviceFallback) {
+        Alert.alert(
+          'Cloud scan unavailable',
+          `${cloudErrors.join('\n')}\n\nContinuing with the on-device scan — you can fix anything wrong on the next screen.`
+        );
       }
 
+      const subtotal = getEffectiveSubtotal(parsed);
       setParticipantIds(selected);
       setMerchant(parsed.merchant);
-      setItems(
-        parsed.items.map((item) => {
-          const qty = Number.isFinite(item.qty) && item.qty > 0 ? Math.floor(item.qty) : 1;
-          return {
-            id: generateId(),
-            name: item.name,
-            qty,
-            unitPrice: item.unitPrice,
-            unitAssignments: Array.from({ length: qty }, () => []),
-          };
-        })
+      addBatch(
+        {
+          label: 'Receipt 1',
+          subtotal,
+          discountPercent: parsed.discountPercent,
+          discountAmount: parsed.discountAmount,
+          taxPercent: parsed.taxPercent,
+          taxAmount: parsed.taxAmount,
+        },
+        parsed.items
       );
+      // Also seed the "flat" totals from this scan, since a single-receipt bill (the common
+      // case) starts in flat mode and should reflect what was actually on the receipt.
       setBillTotals({
-        subtotal: getEffectiveSubtotal(parsed),
+        subtotal,
         discountPercent: parsed.discountPercent,
         discountAmount: parsed.discountAmount,
         taxPercent: parsed.taxPercent,
@@ -135,13 +105,20 @@ export default function PickReceiptScreen({ navigation }: Props) {
     } catch (error: any) {
       Alert.alert('Scan failed', error.message ?? 'Could not read the receipt. Try again or enter items manually.');
       setParticipantIds(selected);
-      setItems([]);
-      setBillTotals({ subtotal: 0, discountPercent: null, discountAmount: null, taxPercent: null, taxAmount: null });
       navigation.navigate('ReviewItems');
     } finally {
       setBusy(false);
       setStatusText('');
     }
+  };
+
+  const onSkip = () => {
+    if (selected.length === 0) {
+      Alert.alert('Pick friends first', 'Select at least one friend who was part of this bill.');
+      return;
+    }
+    setParticipantIds(selected);
+    navigation.navigate('ReviewItems');
   };
 
   if (busy) {
@@ -199,6 +176,9 @@ export default function PickReceiptScreen({ navigation }: Props) {
       <Pressable style={styles.pickButton} onPress={onPick}>
         <Text style={styles.pickButtonText}>Pick receipt photo from gallery</Text>
       </Pressable>
+      <Pressable style={styles.skipButton} onPress={onSkip}>
+        <Text style={styles.skipButtonText}>Skip — I&apos;ll add items manually</Text>
+      </Pressable>
     </ScrollView>
   );
 }
@@ -224,6 +204,8 @@ const createStyles = (colors: ThemeColors) =>
     chipTextSelected: { color: colors.primaryText, fontWeight: '600' },
     pickButton: { backgroundColor: colors.primary, paddingVertical: 14, borderRadius: 8 },
     pickButtonText: { color: colors.primaryText, fontWeight: '600', textAlign: 'center' },
+    skipButton: { paddingVertical: 14, marginBottom: 16 },
+    skipButtonText: { color: colors.textMuted, fontWeight: '600', textAlign: 'center' },
     busyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.background },
     busyText: { marginTop: 16, color: colors.textMuted, textAlign: 'center' },
   });

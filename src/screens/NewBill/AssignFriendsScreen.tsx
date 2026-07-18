@@ -14,7 +14,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'AssignFriends'>;
 export default function AssignFriendsScreen({ navigation }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const { items, setUnitAssignment, participantIds } = useNewBill();
+  const { items, setUnitAssignment, setUnitSplitMode, participantIds } = useNewBill();
   const [friends, setFriends] = useState<Friend[]>([]);
 
   useEffect(() => {
@@ -64,28 +64,58 @@ export default function AssignFriendsScreen({ navigation }: Props) {
       {items.map((item) => (
         <View key={item.id} style={styles.itemGroup}>
           <Text style={styles.itemName}>{item.name || 'Unnamed item'}</Text>
-          {item.unitAssignments.map((assignees, unitIndex) => (
-            <View key={unitIndex} style={styles.unitBlock}>
-              <View style={styles.itemHeader}>
-                <Text style={styles.unitLabel}>{item.qty > 1 ? `Unit ${unitIndex + 1} of ${item.qty}` : 'Price'}</Text>
-                <Text style={styles.itemPrice}>{formatCurrency(item.unitPrice)}</Text>
+          {item.unitAssignments.map((assignees, unitIndex) => {
+            const splitMode = item.unitSplitModes[unitIndex] ?? 'even';
+            return (
+              <View key={unitIndex} style={styles.unitBlock}>
+                <View style={styles.itemHeader}>
+                  <Text style={styles.unitLabel}>{item.qty > 1 ? `Unit ${unitIndex + 1} of ${item.qty}` : 'Price'}</Text>
+                  <Text style={styles.itemPrice}>{formatCurrency(item.unitPrice)}</Text>
+                </View>
+                <View style={styles.chipRow}>
+                  {participants.map((friend) => {
+                    const isSelected = assignees.includes(friend.id);
+                    return (
+                      <Pressable
+                        key={friend.id}
+                        style={[styles.chip, isSelected && styles.chipSelected]}
+                        onPress={() => toggleUnitAssignee(item.id, unitIndex, assignees, friend.id)}
+                      >
+                        <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>{friend.name}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {assignees.length > 1 && (
+                  <>
+                    <View style={styles.splitModeRow}>
+                      <Pressable
+                        style={[styles.splitModeButton, splitMode === 'even' && styles.splitModeButtonActive]}
+                        onPress={() => setUnitSplitMode(item.id, unitIndex, 'even')}
+                      >
+                        <Text style={[styles.splitModeText, splitMode === 'even' && styles.splitModeTextActive]}>
+                          Split it
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.splitModeButton, splitMode === 'each' && styles.splitModeButtonActive]}
+                        onPress={() => setUnitSplitMode(item.id, unitIndex, 'each')}
+                      >
+                        <Text style={[styles.splitModeText, splitMode === 'each' && styles.splitModeTextActive]}>
+                          Full price each
+                        </Text>
+                      </Pressable>
+                    </View>
+                    <Text style={styles.mathHint}>
+                      {splitMode === 'each'
+                        ? `${formatCurrency(item.unitPrice)} each × ${assignees.length} people = ${formatCurrency(item.unitPrice * assignees.length)} total`
+                        : `${formatCurrency(item.unitPrice)} ÷ ${assignees.length} people = ${formatCurrency(item.unitPrice / assignees.length)} each`}
+                    </Text>
+                  </>
+                )}
               </View>
-              <View style={styles.chipRow}>
-                {participants.map((friend) => {
-                  const isSelected = assignees.includes(friend.id);
-                  return (
-                    <Pressable
-                      key={friend.id}
-                      style={[styles.chip, isSelected && styles.chipSelected]}
-                      onPress={() => toggleUnitAssignee(item.id, unitIndex, assignees, friend.id)}
-                    >
-                      <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>{friend.name}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          ))}
+            );
+          })}
         </View>
       ))}
 
@@ -118,6 +148,12 @@ const createStyles = (colors: ThemeColors) =>
     chipSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
     chipText: { color: colors.text },
     chipTextSelected: { color: colors.primaryText, fontWeight: '600' },
+    splitModeRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+    splitModeButton: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingVertical: 6 },
+    splitModeButtonActive: { backgroundColor: colors.surfaceAlt, borderColor: colors.primary },
+    splitModeText: { textAlign: 'center', color: colors.textMuted, fontSize: 12 },
+    splitModeTextActive: { color: colors.primary, fontWeight: '600' },
+    mathHint: { color: colors.textMuted, fontSize: 12, marginTop: 4, fontStyle: 'italic' },
     continueButton: { backgroundColor: colors.primary, paddingVertical: 14, borderRadius: 8, marginTop: 12, marginBottom: 32 },
     continueButtonText: { color: colors.primaryText, fontWeight: '600', textAlign: 'center' },
   });

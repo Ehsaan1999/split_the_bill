@@ -38,8 +38,23 @@ export function computeItemFinalPrice(itemLineTotal: number, totals: BillTotals)
   return round2(itemLineTotal * (1 - discountRate + taxRate));
 }
 
-export function splitItemAmongFriends(finalPrice: number, friendIds: string[]): Record<string, number> {
+export type UnitSplitMode = 'even' | 'each';
+
+/**
+ * 'even' (default): the unit's price is one charge, divided across whoever's tapped —
+ * e.g. one Rs100 parking ticket shared by 2 people is Rs50 each.
+ * 'each': every tapped person owes the *full* price individually — e.g. Rs1000 bowling
+ * where each of 3 people played their own game is Rs1000 each, not Rs1000 split 3 ways.
+ */
+export function splitItemAmongFriends(
+  finalPrice: number,
+  friendIds: string[],
+  mode: UnitSplitMode = 'even'
+): Record<string, number> {
   if (friendIds.length === 0) return {};
+  if (mode === 'each') {
+    return Object.fromEntries(friendIds.map((id) => [id, round2(finalPrice)]));
+  }
   const share = finalPrice / friendIds.length;
   return Object.fromEntries(friendIds.map((id) => [id, round2(share)]));
 }
@@ -81,11 +96,16 @@ export function splitTip(
   return result;
 }
 
+/** Which receipt (or the implicit "manual" batch) an item's discount/tax should be looked up from. */
+export type BatchId = string;
+
 export interface BillItemInput {
   id: string;
   unitPrice: number;
   qty: number;
   assignedFriendIds: string[];
+  splitMode?: UnitSplitMode;
+  batchId?: BatchId;
 }
 
 export interface LineItemWithUnitAssignments {
@@ -93,8 +113,11 @@ export interface LineItemWithUnitAssignments {
   name: string;
   unitPrice: number;
   qty: number;
+  batchId: BatchId;
   /** One entry per unit (length === qty) — who's sharing that specific unit. */
   unitAssignments: string[][];
+  /** One entry per unit (length === qty) — 'even' (default) or 'each'. */
+  unitSplitModes: UnitSplitMode[];
 }
 
 export interface ExpandedUnit {
@@ -104,7 +127,9 @@ export interface ExpandedUnit {
   unitPrice: number;
   unitIndex: number;
   totalUnits: number;
+  batchId: BatchId;
   assignedFriendIds: string[];
+  splitMode: UnitSplitMode;
 }
 
 /**
@@ -124,12 +149,16 @@ export function expandItemsToUnits(items: LineItemWithUnitAssignments[]): Expand
         unitPrice: item.unitPrice,
         unitIndex,
         totalUnits: item.qty,
+        batchId: item.batchId,
         assignedFriendIds: item.unitAssignments[unitIndex] ?? [],
+        splitMode: item.unitSplitModes[unitIndex] ?? 'even',
       });
     }
   }
   return units;
 }
+
+export type DiscountTaxMode = 'flat' | 'isolated';
 
 export interface ComputeBillSplitInput {
   items: BillItemInput[];
@@ -138,6 +167,15 @@ export interface ComputeBillSplitInput {
   discountAmount?: number | null;
   taxPercent?: number | null;
   taxAmount?: number | null;
+  /**
+   * 'flat' (default): the discount/tax fields above apply to every item, regardless of batch —
+   * matches a single receipt or a bill where all items share one discount.
+   * 'isolated': each item instead uses its own batch's totals from `batchTotals` (a batch with
+   * no entry, e.g. manually-added items, gets no discount/tax at all) — for bills combining a
+   * discounted receipt with un-discounted manual extras, or multiple receipts with different terms.
+   */
+  discountTaxMode?: DiscountTaxMode;
+  batchTotals?: Record<BatchId, BillTotals>;
   tipAmount?: number;
   tipSplitMode?: TipSplitMode;
   /** Friends who share the tip; defaults to all of `friendIds`. */
@@ -173,8 +211,12 @@ export function computeBillSplit(input: ComputeBillSplitInput): ComputeBillSplit
 
   const items: BillItemResult[] = input.items.map((item) => {
     const lineTotal = round2(item.unitPrice * item.qty);
-    const finalPrice = computeItemFinalPrice(lineTotal, totals);
-    const perFriendShare = splitItemAmongFriends(finalPrice, item.assignedFriendIds);
+    const itemTotals: BillTotals =
+      input.discountTaxMode === 'isolated'
+        ? (input.batchTotals?.[item.batchId ?? ''] ?? { subtotal: 0 })
+        : totals;
+    const finalPrice = computeItemFinalPrice(lineTotal, itemTotals);
+    const perFriendShare = splitItemAmongFriends(finalPrice, item.assignedFriendIds, item.splitMode);
     for (const [friendId, share] of Object.entries(perFriendShare)) {
       perFriendItemTotal[friendId] = round2((perFriendItemTotal[friendId] ?? 0) + share);
     }

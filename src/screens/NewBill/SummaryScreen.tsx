@@ -3,7 +3,7 @@ import * as Clipboard from 'expo-clipboard';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useNewBill } from '../../context/NewBillContext';
-import { computeBillSplit, expandItemsToUnits } from '../../lib/calc';
+import { type BillTotals, computeBillSplit, expandItemsToUnits } from '../../lib/calc';
 import { formatCurrency } from '../../lib/currency';
 import { listFriends, saveBill } from '../../lib/db';
 import { useTheme } from '../../theme/ThemeContext';
@@ -24,6 +24,8 @@ export default function SummaryScreen({ navigation }: Props) {
   const {
     merchant,
     items,
+    batches,
+    discountTaxMode,
     subtotal,
     discountPercent,
     discountAmount,
@@ -57,6 +59,17 @@ export default function SummaryScreen({ navigation }: Props) {
   const units = useMemo(() => expandItemsToUnits(items), [items]);
   const unitById = useMemo(() => Object.fromEntries(units.map((u) => [u.id, u])), [units]);
 
+  const batchTotals = useMemo(
+    () =>
+      Object.fromEntries(
+        batches.map((b): [string, BillTotals] => [
+          b.id,
+          { subtotal: b.subtotal, discountPercent: b.discountPercent, discountAmount: b.discountAmount, taxPercent: b.taxPercent, taxAmount: b.taxAmount },
+        ])
+      ),
+    [batches]
+  );
+
   const split = useMemo(
     () =>
       computeBillSplit({
@@ -65,18 +78,35 @@ export default function SummaryScreen({ navigation }: Props) {
           unitPrice: unit.unitPrice,
           qty: 1,
           assignedFriendIds: unit.assignedFriendIds,
+          splitMode: unit.splitMode,
+          batchId: unit.batchId,
         })),
         subtotal,
         discountPercent,
         discountAmount,
         taxPercent,
         taxAmount,
+        discountTaxMode,
+        batchTotals,
         tipAmount: toNumber(tipText),
         tipSplitMode: mode,
         tipEligibleFriendIds,
         friendIds: participantIds,
       }),
-    [units, subtotal, discountPercent, discountAmount, taxPercent, taxAmount, tipText, mode, tipEligibleFriendIds, participantIds]
+    [
+      units,
+      subtotal,
+      discountPercent,
+      discountAmount,
+      taxPercent,
+      taxAmount,
+      discountTaxMode,
+      batchTotals,
+      tipText,
+      mode,
+      tipEligibleFriendIds,
+      participantIds,
+    ]
   );
 
   const buildShareText = () => {
@@ -106,24 +136,32 @@ export default function SummaryScreen({ navigation }: Props) {
     setSaving(true);
     try {
       setTip(toNumber(tipText), mode);
+      // Persist exactly what's on screen — the already-computed split, not a fresh
+      // recomputation — so a saved bill can never drift from what the user reviewed here.
       await saveBill({
         date: new Date().toISOString(),
         merchant,
         subtotal,
-        discountPercent,
-        discountAmount,
-        taxPercent,
-        taxAmount,
+        discountPercent: discountTaxMode === 'flat' ? discountPercent : null,
+        discountAmount: discountTaxMode === 'flat' ? discountAmount : null,
+        taxPercent: discountTaxMode === 'flat' ? taxPercent : null,
+        taxAmount: discountTaxMode === 'flat' ? taxAmount : null,
         tipAmount: toNumber(tipText),
         tipSplitMode: mode,
-        tipEligibleFriendIds,
         friendIds: participantIds,
-        items: items.map((item) => ({
-          name: item.name || 'Unnamed item',
-          qty: item.qty,
-          unitPrice: item.unitPrice,
-          unitAssignments: item.unitAssignments,
-        })),
+        units: split.items.map((item) => {
+          const unit = unitById[item.id];
+          return {
+            name: unit?.name || 'Unnamed item',
+            unitPrice: unit?.unitPrice ?? 0,
+            finalPrice: item.finalPrice,
+            assignedFriendIds: unit?.assignedFriendIds ?? [],
+          };
+        }),
+        perFriendItemTotal: split.perFriendItemTotal,
+        perFriendTip: split.perFriendTip,
+        perFriendTotal: split.perFriendTotal,
+        grandTotal: split.grandTotal,
       });
       reset();
       navigation.reset({ index: 0, routes: [{ name: 'Home' }] });
