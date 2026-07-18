@@ -44,27 +44,41 @@ export function splitItemAmongFriends(finalPrice: number, friendIds: string[]): 
   return Object.fromEntries(friendIds.map((id) => [id, round2(share)]));
 }
 
+/**
+ * Splits the tip across `eligibleFriendIds` only (default: everyone in friendItemTotals) — so
+ * someone who wasn't in on the tip (left early, tipped cash separately, etc.) can be excluded.
+ * Excluded friends still get an explicit 0 entry rather than being omitted, so callers can
+ * render "not included" instead of just missing data.
+ */
 export function splitTip(
   tipAmount: number,
   friendItemTotals: Record<string, number>,
-  mode: TipSplitMode
+  mode: TipSplitMode,
+  eligibleFriendIds?: string[]
 ): Record<string, number> {
-  const friendIds = Object.keys(friendItemTotals);
-  if (friendIds.length === 0 || tipAmount === 0) {
-    return Object.fromEntries(friendIds.map((id) => [id, 0]));
+  const allFriendIds = Object.keys(friendItemTotals);
+  const eligible = (eligibleFriendIds ?? allFriendIds).filter((id) => allFriendIds.includes(id));
+  const result: Record<string, number> = Object.fromEntries(allFriendIds.map((id) => [id, 0]));
+
+  if (eligible.length === 0 || tipAmount === 0) {
+    return result;
   }
 
   if (mode === 'proportional') {
-    const sumTotals = friendIds.reduce((sum, id) => sum + friendItemTotals[id], 0);
+    const sumTotals = eligible.reduce((sum, id) => sum + friendItemTotals[id], 0);
     if (sumTotals > 0) {
-      return Object.fromEntries(
-        friendIds.map((id) => [id, round2(tipAmount * (friendItemTotals[id] / sumTotals))])
-      );
+      for (const id of eligible) {
+        result[id] = round2(tipAmount * (friendItemTotals[id] / sumTotals));
+      }
+      return result;
     }
   }
 
-  const share = tipAmount / friendIds.length;
-  return Object.fromEntries(friendIds.map((id) => [id, round2(share)]));
+  const share = tipAmount / eligible.length;
+  for (const id of eligible) {
+    result[id] = round2(share);
+  }
+  return result;
 }
 
 export interface BillItemInput {
@@ -126,6 +140,8 @@ export interface ComputeBillSplitInput {
   taxAmount?: number | null;
   tipAmount?: number;
   tipSplitMode?: TipSplitMode;
+  /** Friends who share the tip; defaults to all of `friendIds`. */
+  tipEligibleFriendIds?: string[];
   friendIds: string[];
 }
 
@@ -165,7 +181,12 @@ export function computeBillSplit(input: ComputeBillSplitInput): ComputeBillSplit
     return { id: item.id, lineTotal, finalPrice, perFriendShare };
   });
 
-  const perFriendTip = splitTip(input.tipAmount ?? 0, perFriendItemTotal, input.tipSplitMode ?? 'even');
+  const perFriendTip = splitTip(
+    input.tipAmount ?? 0,
+    perFriendItemTotal,
+    input.tipSplitMode ?? 'even',
+    input.tipEligibleFriendIds
+  );
 
   const perFriendTotal: Record<string, number> = {};
   let grandTotal = 0;

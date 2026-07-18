@@ -165,6 +165,7 @@ export interface SaveBillInput {
   taxAmount?: number | null;
   tipAmount?: number;
   tipSplitMode?: TipSplitMode;
+  tipEligibleFriendIds?: string[];
   friendIds: string[];
   items: SaveBillItemInput[];
 }
@@ -189,6 +190,7 @@ export async function saveBill(input: SaveBillInput): Promise<string> {
     taxAmount: input.taxAmount,
     tipAmount: input.tipAmount ?? 0,
     tipSplitMode: input.tipSplitMode ?? 'even',
+    tipEligibleFriendIds: input.tipEligibleFriendIds,
     friendIds: input.friendIds,
   });
 

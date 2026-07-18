@@ -39,7 +39,14 @@ export default function SummaryScreen({ navigation }: Props) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [tipText, setTipText] = useState(tipAmount ? String(tipAmount) : '');
   const [mode, setMode] = useState<TipSplitMode>(tipSplitMode);
+  const [tipExcludedIds, setTipExcludedIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+
+  const tipEligibleFriendIds = participantIds.filter((id) => !tipExcludedIds.includes(id));
+
+  const toggleTipEligibility = (friendId: string) => {
+    setTipExcludedIds((prev) => (prev.includes(friendId) ? prev.filter((id) => id !== friendId) : [...prev, friendId]));
+  };
 
   useEffect(() => {
     listFriends().then(setFriends);
@@ -66,9 +73,10 @@ export default function SummaryScreen({ navigation }: Props) {
         taxAmount,
         tipAmount: toNumber(tipText),
         tipSplitMode: mode,
+        tipEligibleFriendIds,
         friendIds: participantIds,
       }),
-    [units, subtotal, discountPercent, discountAmount, taxPercent, taxAmount, tipText, mode, participantIds]
+    [units, subtotal, discountPercent, discountAmount, taxPercent, taxAmount, tipText, mode, tipEligibleFriendIds, participantIds]
   );
 
   const buildShareText = () => {
@@ -108,6 +116,7 @@ export default function SummaryScreen({ navigation }: Props) {
         taxAmount,
         tipAmount: toNumber(tipText),
         tipSplitMode: mode,
+        tipEligibleFriendIds,
         friendIds: participantIds,
         items: items.map((item) => ({
           name: item.name || 'Unnamed item',
@@ -150,6 +159,28 @@ export default function SummaryScreen({ navigation }: Props) {
         </Pressable>
       </View>
 
+      {tipText.trim() && toNumber(tipText) > 0 ? (
+        <>
+          <Text style={styles.tipEligibleLabel}>Split the tip among:</Text>
+          <View style={styles.chipRow}>
+            {participantIds.map((friendId) => {
+              const included = !tipExcludedIds.includes(friendId);
+              return (
+                <Pressable
+                  key={friendId}
+                  style={[styles.chip, included && styles.chipSelected]}
+                  onPress={() => toggleTipEligibility(friendId)}
+                >
+                  <Text style={[styles.chipText, included && styles.chipTextSelected]}>
+                    {friendNameById[friendId] ?? 'Friend'}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </>
+      ) : null}
+
       <Text style={styles.sectionTitle}>Split</Text>
       {participantIds.map((friendId) => (
         <View key={friendId} style={styles.friendBlock}>
@@ -171,6 +202,12 @@ export default function SummaryScreen({ navigation }: Props) {
                 </View>
               );
             })}
+          {toNumber(tipText) > 0 && tipExcludedIds.includes(friendId) && (
+            <View style={styles.itemLine}>
+              <Text style={styles.itemLineName}>Tip</Text>
+              <Text style={styles.itemLineExcluded}>not included</Text>
+            </View>
+          )}
           {(split.perFriendTip[friendId] ?? 0) > 0 && (
             <View style={styles.itemLine}>
               <Text style={styles.itemLineName}>Tip</Text>
@@ -216,6 +253,20 @@ const createStyles = (colors: ThemeColors) =>
     modeButtonActive: { backgroundColor: colors.primary, borderColor: colors.primary },
     modeButtonText: { textAlign: 'center', color: colors.text },
     modeButtonTextActive: { color: colors.primaryText, fontWeight: '600' },
+    tipEligibleLabel: { color: colors.textMuted, marginTop: 12, marginBottom: 8, fontSize: 13 },
+    chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    chip: {
+      borderWidth: 1,
+      borderColor: colors.chipBorder,
+      borderRadius: 20,
+      paddingVertical: 6,
+      paddingHorizontal: 14,
+      backgroundColor: colors.chipBackground,
+    },
+    chipSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
+    chipText: { color: colors.text },
+    chipTextSelected: { color: colors.primaryText, fontWeight: '600' },
+    itemLineExcluded: { color: colors.textMuted, fontStyle: 'italic' },
     friendBlock: { marginBottom: 16, borderBottomWidth: 1, borderBottomColor: colors.border, paddingBottom: 8 },
     friendHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
     friendName: { fontSize: 16, fontWeight: '700', color: colors.text },

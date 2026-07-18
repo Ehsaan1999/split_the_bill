@@ -92,6 +92,22 @@ describe('splitTip', () => {
     const result = splitTip(0, { a: 10, b: 20 }, 'even');
     expect(result).toEqual({ a: 0, b: 0 });
   });
+
+  it('excludes friends not in eligibleFriendIds from an even split, giving them an explicit 0', () => {
+    const result = splitTip(100, { a: 100, b: 100, c: 100 }, 'even', ['a', 'b']);
+    expect(result).toEqual({ a: 50, b: 50, c: 0 });
+  });
+
+  it('excludes friends not in eligibleFriendIds from a proportional split too', () => {
+    // c is excluded, so only a/b's totals (300 + 100) count toward the ratio
+    const result = splitTip(100, { a: 300, b: 100, c: 500 }, 'proportional', ['a', 'b']);
+    expect(result).toEqual({ a: 75, b: 25, c: 0 });
+  });
+
+  it('defaults to everyone when eligibleFriendIds is omitted (backward compatible)', () => {
+    const result = splitTip(100, { a: 300, b: 100 }, 'even');
+    expect(result).toEqual({ a: 50, b: 50 });
+  });
 });
 
 describe('computeBillSplit', () => {
